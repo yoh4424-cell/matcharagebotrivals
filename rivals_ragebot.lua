@@ -1,12 +1,12 @@
 --[[
-    MATCHA RAGEBOT v7 — RIVALS (FFA) — FULL FEATURED
+    MATCHA RAGEBOT v8 — RIVALS (FFA)
+    Inspired by: Unnamed Enhancement + KiciaHook v3
     PlaceId: 17625359962 | Nosniy Games
     
     One-liner:
     loadstring(game:HttpGet("https://raw.githubusercontent.com/yoh4424-cell/matcharagebotrivals/main/rivals_ragebot.lua"))()
     
-    F2 = open/close settings GUI
-    F8 = fully stop & destroy script
+    F2 = Settings GUI    F8 = Destroy script
 ]]
 
 local Players = game:GetService("Players")
@@ -17,41 +17,41 @@ local LP = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
 local ALIVE = true
-local connections = {}
-local drawings = {}
+local allConns = {}
+local allDraws = {}
 
-local function TrackConn(c) table.insert(connections, c) end
-local function TrackDraw(d) table.insert(drawings, d) return d end
+local function AddConn(c) table.insert(allConns, c) end
+local function AddDraw(d) table.insert(allDraws, d) return d end
+
+local curTarget = nil
+local lastFire = 0
+local lastSwitch = 0
+local respawnTick = tick()
+local flyAngle = 0
+local guiOpen = false
 
 -- ══════════════════════════════════════════════════════════════
--- CONFIG (all changeable in GUI)
+-- CONFIG
 -- ══════════════════════════════════════════════════════════════
 local CFG = {
-    -- Combat
-    fireDelay   = 0.08,
-    maxDist     = 3500,
-    -- Movement
-    flySpeed    = 6.0,
-    keepDist    = 2.5,
-    heightOff   = 1.2,
-    evasionOn   = true,
-    evRadius    = 3.5,
-    evSpeed     = 12.0,
-    evJitter    = 1.2,
-    -- Safety
-    voidProtect = true,
-    voidY       = -30,
-    safeSpotY   = 200,
-    safeSpotX   = 0,
-    safeSpotZ   = 0,
-    -- Visuals
-    espOn       = true,
-    crosshairOn = true,
-    rainbowSpeed = 3.0,
-    crossSize   = 12,
-    -- Keybinds
-    keyToggle   = 0x78,  -- F2 = GUI
-    keyDestroy  = 0x77,  -- F8 = destroy
+    fireDelay    = 0.08,
+    maxDist      = 3500,
+    flySpeed     = 6.0,
+    keepDist     = 2.5,
+    heightOff    = 1.2,
+    evasionOn    = true,
+    evRadius     = 3.5,
+    evSpeed      = 12.0,
+    evJitter     = 1.2,
+    voidProtect  = true,
+    voidY        = -30,
+    safeSpotY    = 200,
+    espOn        = true,
+    crossOn      = true,
+    rainbowSpd   = 3.0,
+    crossSize    = 12,
+    noRecoil     = true,
+    noSpread     = true,
 }
 
 -- ══════════════════════════════════════════════════════════════
@@ -71,7 +71,7 @@ end
 
 local function Part(c)
     if not c then return nil end
-    for _, n in ipairs({"Head", "HumanoidRootPart", "UpperTorso", "Torso"}) do
+    for _, n in ipairs({"Head","HumanoidRootPart","UpperTorso","Torso"}) do
         local ok, p = pcall(function() return c:FindFirstChild(n) end)
         if ok and p and p.Position then return p end
     end
@@ -115,468 +115,290 @@ local function Nearest(pos)
     return best, bestP, bestD
 end
 
-local function SafeSpot()
+local function SafePos()
     local myRoot = Root(LP.Character)
-    local x = CFG.safeSpotX
-    local z = CFG.safeSpotZ
+    local x, z = 50, 50
     if myRoot then
         local ok, pos = pcall(function() return myRoot.Position end)
-        if ok and pos then
-            x = pos.X + 50
-            z = pos.Z + 50
-            CFG.safeSpotX = x
-            CFG.safeSpotZ = z
-        end
+        if ok and pos then x = pos.X + 50; z = pos.Z + 50 end
     end
     return Vector3.new(x, CFG.safeSpotY, z)
 end
 
 -- ══════════════════════════════════════════════════════════════
--- DESTROY EVERYTHING
+-- DESTROY
 -- ══════════════════════════════════════════════════════════════
 local function FullDestroy()
     ALIVE = false
-    for _, c in ipairs(connections) do
-        pcall(function() c:Disconnect() end)
-    end
-    for _, d in ipairs(drawings) do
-        pcall(function() d:Remove() end)
-    end
-    connections = {}
-    drawings = {}
-    print("[ragebot] DESTROYED — all objects removed")
+    for _, c in ipairs(allConns) do pcall(function() c:Disconnect() end) end
+    for _, d in ipairs(allDraws) do pcall(function() d:Remove() end) end
+    allConns = {}
+    allDraws = {}
+    print("[ragebot] DESTROYED")
 end
 
 -- ══════════════════════════════════════════════════════════════
--- ESP: box + name + HP + line
+-- DRAWING: HUD
 -- ══════════════════════════════════════════════════════════════
-local espBox = TrackDraw(Drawing.new("Square"))
-espBox.Filled = false
-espBox.Thickness = 2
-espBox.Visible = false
+local function MakeText(pos, size, col)
+    local t = AddDraw(Drawing.new("Text"))
+    t.Position = pos
+    t.Size = size
+    t.Font = Drawing.Fonts.Monospace
+    t.Outline = true
+    t.Color = col or Color3.new(1,1,1)
+    t.Visible = true
+    return t
+end
 
-local espName = TrackDraw(Drawing.new("Text"))
-espName.Size = 14
-espName.Font = Drawing.Fonts.Monospace
-espName.Center = true
-espName.Outline = true
-espName.Visible = false
+local hud1 = MakeText(Vector2.new(20, 10), 16, Color3.new(0,1,0))
+local hud2 = MakeText(Vector2.new(20, 30), 13, Color3.new(1,1,0))
+local hud3 = MakeText(Vector2.new(20, 48), 12, Color3.new(0,1,0))
 
-local espHP = TrackDraw(Drawing.new("Text"))
-espHP.Size = 12
-espHP.Font = Drawing.Fonts.Monospace
-espHP.Center = true
-espHP.Outline = true
-espHP.Visible = false
+local function UpdateHUD()
+    hud1.Text = "[ RIVALS RAGE ]  F2=menu  F8=destroy"
+    hud1.Color = Color3.fromHSV(tick() * 0.1 % 1, 1, 1)
+    if curTarget and Alive(curTarget) then
+        local n = pcall(function() return curTarget.Name end) and curTarget.Name or "?"
+        local d = 0
+        local mr = Root(LP.Character)
+        local ok, pp = pcall(function() return Part(curTarget.Character) end)
+        if ok and pp and pp.Position and mr then d = math.floor((pp.Position - mr.Position).Magnitude) end
+        local hp,mh = 100,100
+        local h = Hum(curTarget.Character)
+        if h then pcall(function() hp = math.floor(h.Health) end); pcall(function() mh = math.floor(h.MaxHealth) end) end
+        hud2.Text = n .. " [" .. d .. "m] HP:" .. hp .. "/" .. mh
+        hud2.Color = Color3.new(1,1,0)
+    else
+        hud2.Text = "no target"
+        hud2.Color = Color3.new(0.5,0.5,0.5)
+    end
+    local mhp = "?"
+    local h = Hum(LP.Character)
+    if h then pcall(function() mhp = math.floor(h.Health) end) end
+    hud3.Text = "My HP: " .. mhp
+end
 
-local espLine = TrackDraw(Drawing.new("Line"))
-espLine.Thickness = 1
-espLine.Visible = false
+-- ══════════════════════════════════════════════════════════════
+-- DRAWING: ESP (box + name + HP + tracers)
+-- ══════════════════════════════════════════════════════════════
+local espBox = AddDraw(Drawing.new("Square"))
+espBox.Filled = false; espBox.Thickness = 2; espBox.Visible = false
 
-local curTarget = nil
+local espName = AddDraw(Drawing.new("Text"))
+espName.Size = 14; espName.Font = Drawing.Fonts.Monospace; espName.Center = true; espName.Outline = true; espName.Visible = false
+
+local espHP = AddDraw(Drawing.new("Text"))
+espHP.Size = 12; espHP.Font = Drawing.Fonts.Monospace; espHP.Center = true; espHP.Outline = true; espHP.Visible = false
+
+local espLine = AddDraw(Drawing.new("Line"))
+espLine.Thickness = 1; espLine.Visible = false
 
 local function UpdateESP()
     if not CFG.espOn or not curTarget or not Alive(curTarget) then
-        espBox.Visible = false
-        espName.Visible = false
-        espHP.Visible = false
-        espLine.Visible = false
+        espBox.Visible = false; espName.Visible = false; espHP.Visible = false; espLine.Visible = false
         return
     end
     local cam = Camera
-    local myRoot = Root(LP.Character)
-    if not cam or not myRoot then
-        espBox.Visible = false; espName.Visible = false; espHP.Visible = false; espLine.Visible = false
-        return
-    end
+    if not cam then return end
     local char = curTarget.Character
-    if not char then
-        espBox.Visible = false; espName.Visible = false; espHP.Visible = false; espLine.Visible = false
-        return
-    end
+    if not char then espBox.Visible=false; espName.Visible=false; espHP.Visible=false; espLine.Visible=false; return end
     local hrp = Root(char)
-    if not hrp then
-        espBox.Visible = false; espName.Visible = false; espHP.Visible = false; espLine.Visible = false
-        return
-    end
+    if not hrp then espBox.Visible=false; espName.Visible=false; espHP.Visible=false; espLine.Visible=false; return end
     local ok, tPos = pcall(function() return hrp.Position end)
-    if not ok or not tPos then
-        espBox.Visible = false; espName.Visible = false; espHP.Visible = false; espLine.Visible = false
-        return
-    end
-    local screenPos, onScreen = WorldToScreen(tPos)
-    if not onScreen then
-        espBox.Visible = false; espName.Visible = false; espHP.Visible = false; espLine.Visible = false
-        return
-    end
+    if not ok or not tPos then espBox.Visible=false; espName.Visible=false; espHP.Visible=false; espLine.Visible=false; return end
+    local sp, vis = WorldToScreen(tPos)
+    if not vis then espBox.Visible=false; espName.Visible=false; espHP.Visible=false; espLine.Visible=false; return end
+
     local headPart = char:FindFirstChild("Head")
-    local headY = screenPos.Y
+    local headY = sp.Y
     if headPart and headPart.Position then
-        local hs = WorldToScreen(headPart.Position + Vector3.new(0, 1.5, 0))
+        local hs = WorldToScreen(headPart.Position + Vector3.new(0,1.5,0))
         headY = hs.Y
     end
-    local feetS = WorldToScreen(tPos - Vector3.new(0, 3, 0))
-    local boxH = math.abs(feetS.Y - headY)
-    local boxW = boxH * 0.6
+    local fs = WorldToScreen(tPos - Vector3.new(0,3,0))
+    local bH = math.abs(fs.Y - headY)
+    local bW = bH * 0.6
 
-    espBox.Position = Vector2.new(screenPos.X - boxW / 2, headY)
-    espBox.Size = Vector2.new(boxW, boxH)
-    espBox.Color = Color3.new(1, 0, 0)
+    espBox.Position = Vector2.new(sp.X - bW/2, headY)
+    espBox.Size = Vector2.new(bW, bH)
+    espBox.Color = Color3.new(1,0,0)
     espBox.Visible = true
 
-    espName.Position = Vector2.new(screenPos.X, headY - 16)
+    espName.Position = Vector2.new(sp.X, headY - 16)
     espName.Text = curTarget.Name
-    espName.Color = Color3.new(1, 1, 1)
+    espName.Color = Color3.new(1,1,1)
     espName.Visible = true
 
     local hum = Hum(char)
-    local hp, mh = 100, 100
-    if hum then
-        pcall(function() hp = hum.Health end)
-        pcall(function() mh = hum.MaxHealth end)
-    end
-    local pct = math.clamp(hp / mh, 0, 1)
-    espHP.Position = Vector2.new(screenPos.X, feetS.Y + 4)
+    local hp,mh = 100,100
+    if hum then pcall(function() hp=hum.Health end); pcall(function() mh=hum.MaxHealth end) end
+    local pct = math.clamp(hp/mh,0,1)
+    espHP.Position = Vector2.new(sp.X, fs.Y + 4)
     espHP.Text = math.floor(hp) .. "/" .. math.floor(mh)
-    espHP.Color = Color3.new(1 - pct, pct, 0)
+    espHP.Color = Color3.new(1-pct,pct,0)
     espHP.Visible = true
 
     local vp = cam.ViewportSize
-    espLine.From = Vector2.new(vp.X / 2, vp.Y / 2)
-    espLine.To = screenPos
-    espLine.Color = Color3.new(1, 0, 0)
+    espLine.From = Vector2.new(vp.X/2, vp.Y/2)
+    espLine.To = sp
+    espLine.Color = Color3.new(1,0,0)
     espLine.Visible = true
 end
 
 -- ══════════════════════════════════════════════════════════════
--- HUD: status bar
--- ══════════════════════════════════════════════════════════════
-local hud1 = TrackDraw(Drawing.new("Text"))
-hud1.Position = Vector2.new(20, 10)
-hud1.Size = 16
-hud1.Font = Drawing.Fonts.Monospace
-hud1.Outline = true
-hud1.Visible = true
-
-local hud2 = TrackDraw(Drawing.new("Text"))
-hud2.Position = Vector2.new(20, 30)
-hud2.Size = 13
-hud2.Font = Drawing.Fonts.Monospace
-hud2.Outline = true
-hud2.Visible = true
-
-local hud3 = TrackDraw(Drawing.new("Text"))
-hud3.Position = Vector2.new(20, 48)
-hud3.Size = 12
-hud3.Font = Drawing.Fonts.Monospace
-hud3.Outline = true
-hud3.Visible = true
-
-local function UpdateHUD()
-    local myHP, myMax = "?", "?"
-    local h = Hum(LP.Character)
-    if h then
-        pcall(function() myHP = math.floor(h.Health) end)
-        pcall(function() myMax = math.floor(h.MaxHealth) end)
-    end
-    hud1.Text = "[ RIVALS RAGEBOT ]  F2=menu  F8=destroy"
-    hud1.Color = Color3.fromHSV(tick() * 0.1 % 1, 1, 1)
-
-    if curTarget and Alive(curTarget) then
-        local n = ""
-        pcall(function() n = curTarget.Name end)
-        local d = 0
-        local mr = Root(LP.Character)
-        local ok, pp = pcall(function() return Part(curTarget.Character) end)
-        if ok and pp and pp.Position and mr then
-            d = math.floor((pp.Position - mr.Position).Magnitude)
-        end
-        hud2.Text = "Target: " .. n .. " [" .. d .. "m]"
-        hud2.Color = Color3.new(1, 1, 0)
-    else
-        hud2.Text = "Target: none"
-        hud2.Color = Color3.new(0.5, 0.5, 0.5)
-    end
-    hud3.Text = "HP: " .. myHP .. "/" .. myMax
-    hud3.Color = Color3.new(0, 1, 0)
-end
-
--- ══════════════════════════════════════════════════════════════
--- RAINBOW SPINNING CROSSHAIR
+-- DRAWING: RAINBOW CROSSHAIR
 -- ══════════════════════════════════════════════════════════════
 local crossLines = {}
 for i = 1, 4 do
-    crossLines[i] = TrackDraw(Drawing.new("Line"))
+    crossLines[i] = AddDraw(Drawing.new("Line"))
     crossLines[i].Thickness = 2
     crossLines[i].Visible = false
 end
-local crossDot = TrackDraw(Drawing.new("Circle"))
-crossDot.Filled = true
-crossDot.Radius = 2
-crossDot.Visible = false
+local crossDot = AddDraw(Drawing.new("Circle"))
+crossDot.Filled = true; crossDot.Radius = 2; crossDot.Visible = false
 
-local crossAngle = 0
-local function UpdateCrosshair()
-    if not CFG.crosshairOn then
+local crossAng = 0
+local function UpdateCross()
+    if not CFG.crossOn then
         for i = 1, 4 do crossLines[i].Visible = false end
         crossDot.Visible = false
         return
     end
     local vp = Camera.ViewportSize
-    local cx, cy = vp.X / 2, vp.Y / 2
-    local center = Vector2.new(cx, cy)
-
-    crossAngle = crossAngle + CFG.rainbowSpeed * 0.05
-    local hue = (crossAngle * 0.1) % 1
-    local col = Color3.fromHSV(hue, 1, 1)
+    local cx, cy = vp.X/2, vp.Y/2
+    crossAng = crossAng + CFG.rainbowSpd * 0.05
+    local hue = (crossAng * 0.1) % 1
     local sz = CFG.crossSize
     local gap = 4
-
     for i = 1, 4 do
-        local angle = crossAngle + (i - 1) * math.pi / 2
-        local inner = Vector2.new(cx + math.cos(angle) * gap, cy + math.sin(angle) * gap)
-        local outer = Vector2.new(cx + math.cos(angle) * (gap + sz), cy + math.sin(angle) * (gap + sz))
-        crossLines[i].From = inner
-        crossLines[i].To = outer
-        crossLines[i].Color = Color3.fromHSV((hue + (i - 1) * 0.25) % 1, 1, 1)
+        local a = crossAng + (i-1) * math.pi / 2
+        crossLines[i].From = Vector2.new(cx + math.cos(a)*gap, cy + math.sin(a)*gap)
+        crossLines[i].To = Vector2.new(cx + math.cos(a)*(gap+sz), cy + math.sin(a)*(gap+sz))
+        crossLines[i].Color = Color3.fromHSV((hue + (i-1)*0.25) % 1, 1, 1)
         crossLines[i].Visible = true
     end
-    crossDot.Position = center
-    crossDot.Color = col
+    crossDot.Position = Vector2.new(cx, cy)
+    crossDot.Color = Color3.fromHSV(hue, 1, 1)
     crossDot.Visible = true
 end
 
 -- ══════════════════════════════════════════════════════════════
--- SETTINGS GUI (F2)
+-- DRAWING: SETTINGS GUI (F2)
 -- ══════════════════════════════════════════════════════════════
-local guiOpen = false
-local guiObjs = {}
+local guiBG = AddDraw(Drawing.new("Square"))
+guiBG.Filled = true; guiBG.Color = Color3.new(0.06,0.06,0.1); guiBG.Transparency = 0.93
+guiBG.Size = Vector2.new(340, 460); guiBG.Position = Vector2.new(20, 80); guiBG.Visible = false
 
-local function MakeGUI()
-    -- Background
-    guiObjs.bg = TrackDraw(Drawing.new("Square"))
-    guiObjs.bg.Filled = true
-    guiObjs.bg.Color = Color3.new(0.08, 0.08, 0.12)
-    guiObjs.bg.Transparency = 0.92
-    guiObjs.bg.Size = Vector2.new(320, 420)
-    guiObjs.bg.Position = Vector2.new(20, 80)
-    guiObjs.bg.Visible = false
+local guiTitle = AddDraw(Drawing.new("Text"))
+guiTitle.Position = Vector2.new(40, 88); guiTitle.Size = 16; guiTitle.Font = Drawing.Fonts.Monospace
+guiTitle.Color = Color3.fromHSV(0,0,1); guiTitle.Outline = true; guiTitle.Text = "RAGEBOT SETTINGS"; guiTitle.Visible = false
 
-    guiObjs.title = TrackDraw(Drawing.new("Text"))
-    guiObjs.title.Position = Vector2.new(30, 88)
-    guiObjs.title.Size = 18
-    guiObjs.title.Font = Drawing.Fonts.Monospace
-    guiObjs.title.Color = Color3.fromHSV(0, 0, 1)
-    guiObjs.title.Outline = true
-    guiObjs.title.Text = "=== RAGEBOT SETTINGS ==="
-    guiObjs.title.Visible = false
+local sliders = {}
+local sliderData = {
+    {key="fireDelay",    lbl="Fire Delay",     mn=0.03, mx=0.5,  fmt="%.2f"},
+    {key="maxDist",      lbl="Max Distance",   mn=100,  mx=8000, fmt="%.0f"},
+    {key="flySpeed",     lbl="Fly Speed",      mn=1,    mx=15,   fmt="%.1f"},
+    {key="keepDist",     lbl="Keep Distance",  mn=0.5,  mx=10,   fmt="%.1f"},
+    {key="heightOff",    lbl="Height Offset",  mn=-2,   mx=8,    fmt="%.1f"},
+    {key="evRadius",     lbl="Evasion Radius", mn=0.5,  mx=10,   fmt="%.1f"},
+    {key="evSpeed",      lbl="Evasion Speed",  mn=1,    mx=20,   fmt="%.1f"},
+    {key="evJitter",     lbl="Evasion Jitter", mn=0,    mx=5,    fmt="%.1f"},
+    {key="voidY",        lbl="Void Kill Y",    mn=-100, mx=0,    fmt="%.0f"},
+    {key="safeSpotY",    lbl="Safe Spot Y",    mn=50,   mx=500,  fmt="%.0f"},
+    {key="crossSize",    lbl="Crosshair Size", mn=4,    mx=30,   fmt="%.0f"},
+    {key="rainbowSpd",   lbl="Rainbow Speed",  mn=0.5,  mx=10,   fmt="%.1f"},
+}
 
-    -- Settings lines
-    local items = {
-        {key = "fireDelay",    label = "Fire Delay",     min = 0.03, max = 0.5,  fmt = "%.2f"},
-        {key = "maxDist",      label = "Max Distance",   min = 100,  max = 8000, fmt = "%.0f", int = true},
-        {key = "flySpeed",     label = "Fly Speed",      min = 1,    max = 15,   fmt = "%.1f"},
-        {key = "keepDist",     label = "Keep Distance",  min = 0.5,  max = 10,   fmt = "%.1f"},
-        {key = "heightOff",    label = "Height Offset",  min = -2,   max = 8,    fmt = "%.1f"},
-        {key = "evRadius",     label = "Evasion Radius", min = 0.5,  max = 10,   fmt = "%.1f"},
-        {key = "evSpeed",      label = "Evasion Speed",  min = 1,    max = 20,   fmt = "%.1f"},
-        {key = "evJitter",     label = "Evasion Jitter", min = 0,    max = 5,    fmt = "%.1f"},
-        {key = "safeSpotY",    label = "Void Safe Y",    min = 50,   max = 500,  fmt = "%.0f", int = true},
-        {key = "crossSize",    label = "Crosshair Size", min = 4,    max = 30,   fmt = "%.0f", int = true},
-        {key = "rainbowSpeed", label = "Rainbow Speed",  min = 0.5,  max = 10,   fmt = "%.1f"},
-    }
+for i, s in ipairs(sliderData) do
+    local y = 112 + (i-1)*26
+    local lbl = AddDraw(Drawing.new("Text"))
+    lbl.Position = Vector2.new(30, y); lbl.Size = 12; lbl.Font = Drawing.Fonts.Monospace
+    lbl.Color = Color3.new(0.8,0.8,0.8); lbl.Outline = true; lbl.Text = s.lbl; lbl.Visible = false
 
-    guiObjs.lines = {}
-    guiObjs.labels = {}
-    guiObjs.vals = {}
+    local barBG = AddDraw(Drawing.new("Square"))
+    barBG.Filled = true; barBG.Color = Color3.new(0.15,0.15,0.2)
+    barBG.Size = Vector2.new(130, 8); barBG.Position = Vector2.new(175, y+3); barBG.Visible = false
 
-    for i, item in ipairs(items) do
-        local y = 115 + (i - 1) * 26
+    local barFill = AddDraw(Drawing.new("Square"))
+    barFill.Filled = true; barFill.Color = Color3.fromHSV(i/#sliderData, 0.7, 0.9)
+    local v = CFG[s.key] or 0
+    local pct = (v - s.mn)/(s.mx - s.mn)
+    barFill.Size = Vector2.new(math.clamp(pct*130,0,130), 8); barFill.Position = Vector2.new(175, y+3); barFill.Visible = false
 
-        guiObjs.labels[i] = TrackDraw(Drawing.new("Text"))
-        guiObjs.labels[i].Position = Vector2.new(30, y)
-        guiObjs.labels[i].Size = 13
-        guiObjs.labels[i].Font = Drawing.Fonts.Monospace
-        guiObjs.labels[i].Color = Color3.new(0.8, 0.8, 0.8)
-        guiObjs.labels[i].Outline = true
-        guiObjs.labels[i].Text = item.label
-        guiObjs.labels[i].Visible = false
+    local val = AddDraw(Drawing.new("Text"))
+    val.Position = Vector2.new(310, y); val.Size = 11; val.Font = Drawing.Fonts.Monospace
+    val.Color = Color3.new(1,1,1); val.Outline = true; val.Text = string.format(s.fmt, v); val.Visible = false
 
-        -- Slider bar bg
-        guiObjs.lines[i] = TrackDraw(Drawing.new("Square"))
-        guiObjs.lines[i].Filled = true
-        guiObjs.lines[i].Color = Color3.new(0.2, 0.2, 0.25)
-        guiObjs.lines[i].Size = Vector2.new(120, 8)
-        guiObjs.lines[i].Position = Vector2.new(170, y + 3)
-        guiObjs.lines[i].Visible = false
-
-        -- Slider fill
-        guiObjs.lines[i].fill = TrackDraw(Drawing.new("Square"))
-        guiObjs.lines[i].fill.Filled = true
-        guiObjs.lines[i].fill.Color = Color3.fromHSV(i / #items, 0.8, 0.9)
-        local val = CFG[item.key] or 0
-        local pct = (val - item.min) / (item.max - item.min)
-        guiObjs.lines[i].fill.Size = Vector2.new(math.clamp(pct * 120, 0, 120), 8)
-        guiObjs.lines[i].fill.Position = Vector2.new(170, y + 3)
-        guiObjs.lines[i].fill.Visible = false
-
-        guiObjs.vals[i] = TrackDraw(Drawing.new("Text"))
-        guiObjs.vals[i].Position = Vector2.new(295, y)
-        guiObjs.vals[i].Size = 12
-        guiObjs.vals[i].Font = Drawing.Fonts.Monospace
-        guiObjs.vals[i].Color = Color3.new(1, 1, 1)
-        guiObjs.vals[i].Outline = true
-        guiObjs.vals[i].Text = string.format(item.fmt, val)
-        guiObjs.vals[i].Visible = false
-
-        item.idx = i
-    end
-
-    -- Toggle lines
-    local toggles = {
-        {key = "evasionOn",    label = "Evasion"},
-        {key = "voidProtect",  label = "Void Protect"},
-        {key = "espOn",        label = "ESP"},
-        {key = "crosshairOn",  label = "Crosshair"},
-    }
-
-    guiObjs.toggles = {}
-    guiObjs.togLabels = {}
-    for i, tog in ipairs(toggles) do
-        local y = 115 + #items * 26 + (i - 1) * 22
-
-        guiObjs.togLabels[i] = TrackDraw(Drawing.new("Text"))
-        guiObjs.togLabels[i].Position = Vector2.new(30, y)
-        guiObjs.togLabels[i].Size = 13
-        guiObjs.togLabels[i].Font = Drawing.Fonts.Monospace
-        guiObjs.togLabels[i].Color = Color3.new(0.8, 0.8, 0.8)
-        guiObjs.togLabels[i].Outline = true
-        guiObjs.togLabels[i].Text = tog.label
-        guiObjs.togLabels[i].Visible = false
-
-        guiObjs.toggles[i] = TrackDraw(Drawing.new("Square"))
-        guiObjs.toggles[i].Filled = true
-        guiObjs.toggles[i].Size = Vector2.new(14, 14)
-        guiObjs.toggles[i].Position = Vector2.new(280, y - 1)
-        guiObjs.toggles[i].Color = CFG[tog.key] and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
-        guiObjs.toggles[i].Visible = false
-
-        guiObjs.toggles[i].check = TrackDraw(Drawing.new("Text"))
-        guiObjs.toggles[i].check.Position = Vector2.new(298, y - 1)
-        guiObjs.toggles[i].check.Size = 13
-        guiObjs.toggles[i].check.Font = Drawing.Fonts.Monospace
-        guiObjs.toggles[i].check.Color = Color3.new(1, 1, 1)
-        guiObjs.toggles[i].check.Outline = true
-        guiObjs.toggles[i].check.Text = CFG[tog.key] and "ON" or "OFF"
-        guiObjs.toggles[i].check.Visible = false
-
-        tog.idx = i
-    end
-
-    guiObjs.items = items
-    guiObjs.togDefs = toggles
+    sliders[i] = {lbl=lbl, barBG=barBG, barFill=barFill, val=val, data=s}
 end
 
-MakeGUI()
+local toggles = {}
+local togData = {
+    {key="evasionOn",   lbl="Evasion"},
+    {key="voidProtect", lbl="Void Protect"},
+    {key="espOn",       lbl="ESP"},
+    {key="crossOn",     lbl="Crosshair"},
+    {key="noRecoil",    lbl="No Recoil"},
+    {key="noSpread",    lbl="No Spread"},
+}
 
-local function ShowGUI(state)
-    guiOpen = state
-    guiObjs.bg.Visible = state
-    guiObjs.title.Visible = state
-    for i = 1, #guiObjs.labels do
-        guiObjs.labels[i].Visible = state
-        guiObjs.lines[i].Visible = state
-        guiObjs.lines[i].fill.Visible = state
-        guiObjs.vals[i].Visible = state
+for i, tg in ipairs(togData) do
+    local y = 112 + #sliderData*26 + (i-1)*24
+    local lbl = AddDraw(Drawing.new("Text"))
+    lbl.Position = Vector2.new(30, y); lbl.Size = 12; lbl.Font = Drawing.Fonts.Monospace
+    lbl.Color = Color3.new(0.8,0.8,0.8); lbl.Outline = true; lbl.Text = tg.lbl; lbl.Visible = false
+
+    local box = AddDraw(Drawing.new("Square"))
+    box.Filled = true; box.Size = Vector2.new(14,14)
+    box.Position = Vector2.new(290, y-1)
+    box.Color = CFG[tg.key] and Color3.new(0,1,0) or Color3.new(1,0,0); box.Visible = false
+
+    local stxt = AddDraw(Drawing.new("Text"))
+    stxt.Position = Vector2.new(310, y-1); stxt.Size = 12; stxt.Font = Drawing.Fonts.Monospace
+    stxt.Color = Color3.new(1,1,1); stxt.Outline = true
+    stxt.Text = CFG[tg.key] and "ON" or "OFF"; stxt.Visible = false
+
+    toggles[i] = {lbl=lbl, box=box, stxt=stxt, data=tg}
+end
+
+local function ShowGUI(s)
+    guiOpen = s
+    guiBG.Visible = s; guiTitle.Visible = s
+    for _, sl in ipairs(sliders) do
+        sl.lbl.Visible = s; sl.barBG.Visible = s; sl.barFill.Visible = s; sl.val.Visible = s
     end
-    for i = 1, #guiObjs.toggles do
-        guiObjs.togLabels[i].Visible = state
-        guiObjs.toggles[i].Visible = state
-        guiObjs.toggles[i].check.Visible = state
+    for _, tg in ipairs(toggles) do
+        tg.lbl.Visible = s; tg.box.Visible = s; tg.stxt.Visible = s
     end
 end
 
 local function RefreshGUI()
-    for i, item in ipairs(guiObjs.items) do
-        local val = CFG[item.key] or 0
-        local pct = (val - item.min) / (item.max - item.min)
-        guiObjs.lines[i].fill.Size = Vector2.new(math.clamp(pct * 120, 0, 120), 8)
-        guiObjs.vals[i].Text = string.format(item.fmt, val)
+    for i, sl in ipairs(sliders) do
+        local v = CFG[sl.data.key] or 0
+        local pct = (v - sl.data.mn)/(sl.data.mx - sl.data.mn)
+        sl.barFill.Size = Vector2.new(math.clamp(pct*130,0,130), 8)
+        sl.val.Text = string.format(sl.data.fmt, v)
     end
-    for i, tog in ipairs(guiObjs.togDefs) do
-        local on = CFG[tog.key]
-        guiObjs.toggles[i].Color = on and Color3.new(0, 1, 0) or Color3.new(1, 0, 0)
-        guiObjs.toggles[i].check.Text = on and "ON" or "OFF"
+    for i, tg in ipairs(toggles) do
+        tg.box.Color = CFG[tg.data.key] and Color3.new(0,1,0) or Color3.new(1,0,0)
+        tg.stxt.Text = CFG[tg.data.key] and "ON" or "OFF"
     end
 end
 
--- GUI click handling
-TrackConn(UIS.InputBegan:Connect(function(input, processed)
-    if not ALIVE then return end
-
-    -- F2 toggle GUI
-    if input.KeyCode == Enum.KeyCode.F2 then
-        ShowGUI(not guiOpen)
-        return
-    end
-
-    -- F8 destroy
-    if input.KeyCode == Enum.KeyCode.F8 then
-        FullDestroy()
-        return
-    end
-
-    -- GUI interactions
-    if guiOpen and input.UserInputType == Enum.UserInputType.MouseButton1 then
-        local mouse = Vector2.new(input.Position.X, input.Position.Y)
-
-        -- Check sliders
-        for i, item in ipairs(guiObjs.items) do
-            local barX, barY = 170, 115 + (i - 1) * 26 + 3
-            if mouse.X >= barX and mouse.X <= barX + 120 and mouse.Y >= barY and mouse.Y <= barY + 8 then
-                local pct = math.clamp((mouse.X - barX) / 120, 0, 1)
-                local val = item.min + pct * (item.max - item.min)
-                if item.int then val = math.floor(val + 0.5) end
-                CFG[item.key] = val
-                RefreshGUI()
-                print("[ragebot] " .. item.label .. " = " .. val)
-            end
-        end
-
-        -- Check toggles
-        for i, tog in ipairs(guiObjs.togDefs) do
-            local togX, togY = 280, 115 + #guiObjs.items * 26 + (i - 1) * 22 - 1
-            if mouse.X >= togX and mouse.X <= togX + 14 and mouse.Y >= togY and mouse.Y <= togY + 14 then
-                CFG[tog.key] = not CFG[tog.key]
-                RefreshGUI()
-                print("[ragebot] " .. tog.label .. " = " .. tostring(CFG[tog.key]))
-            end
-        end
-    end
-end))
-
 -- ══════════════════════════════════════════════════════════════
--- AIM: lookAt
+-- AIM + FLY + GODMODE + WEAPONMODS
 -- ══════════════════════════════════════════════════════════════
 local function AimAt(pos)
-    local ok, camPos = pcall(function() return Camera.Position end)
-    if ok and camPos then
-        pcall(function() Camera.lookAt(camPos, pos) end)
-    end
+    local ok, cp = pcall(function() return Camera.Position end)
+    if ok and cp then pcall(function() Camera.lookAt(cp, pos) end) end
 end
 
--- ══════════════════════════════════════════════════════════════
--- FLY: velocity + snap
--- ══════════════════════════════════════════════════════════════
-local flyAngle = 0
 local function FlyTo(root, tPos)
     local ok, myPos = pcall(function() return root.Position end)
     if not ok or not myPos then return end
-
     local delta = tPos - myPos
-    local dist = delta.Magnitude
-    if dist < 0.5 then return end
-
+    if delta.Magnitude < 0.5 then return end
     local dir = delta.Unit
     local desired = tPos - dir * CFG.keepDist + Vector3.new(0, CFG.heightOff, 0)
 
@@ -589,85 +411,122 @@ local function FlyTo(root, tPos)
         )
     end
 
-    local moveDelta = desired - myPos
-    local moveDist = moveDelta.Magnitude
-    if moveDist < 0.3 then return end
-
-    local vel = moveDelta.Unit * math.clamp(moveDist * CFG.flySpeed, 40, 500)
+    local mv = desired - myPos
+    if mv.Magnitude < 0.3 then return end
+    local vel = mv.Unit * math.clamp(mv.Magnitude * CFG.flySpeed, 40, 500)
     pcall(function() root.AssemblyLinearVelocity = vel end)
-
-    if moveDist < 80 then
+    if mv.Magnitude < 80 then
         pcall(function() root.Position = desired end)
     end
 end
 
--- ══════════════════════════════════════════════════════════════
--- GOD MODE + WEAPON MODS
--- ══════════════════════════════════════════════════════════════
 local function GodMode()
     local h = Hum(LP.Character)
     if h then
         pcall(function() h.MaxHealth = 99999 end)
         pcall(function() h.Health = 99999 end)
     end
-    pcall(function() setgc({Health = 99999, MaxHealth = 99999, RecoilAmount = 0, SpreadAngle = 0, CameraRecoilMult = 0}) end)
+    if CFG.noRecoil or CFG.noSpread then
+        pcall(function()
+            setgc({
+                RecoilAmount = 0,
+                SpreadAngle = 0,
+                CameraRecoilMult = 0,
+                AimSpreadPenalty = 0,
+                RecoilRecovery = 0,
+                WeaponSpread = 0,
+            })
+        end)
+    end
 end
 
--- ══════════════════════════════════════════════════════════════
--- VOID PROTECTION: teleport back if falling
--- ══════════════════════════════════════════════════════════════
 local function VoidCheck()
     if not CFG.voidProtect then return end
-    local myRoot = Root(LP.Character)
-    if not myRoot then return end
-    local ok, pos = pcall(function() return myRoot.Position end)
-    if not ok or not pos then return end
-    if pos.Y < CFG.voidY then
-        local safe = SafeSpot()
-        pcall(function() myRoot.Position = safe end)
-        pcall(function() myRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0) end)
-        print("[ragebot] void saved — teleported to safe spot")
+    local r = Root(LP.Character)
+    if not r then return end
+    local ok, pos = pcall(function() return r.Position end)
+    if ok and pos and pos.Y < CFG.voidY then
+        local sp = SafePos()
+        pcall(function() r.Position = sp end)
+        pcall(function() r.AssemblyLinearVelocity = Vector3.new(0,0,0) end)
+        print("[ragebot] void saved")
     end
 end
 
 -- ══════════════════════════════════════════════════════════════
+-- INPUT
+-- ══════════════════════════════════════════════════════════════
+AddConn(UIS.InputBegan:Connect(function(input, gp)
+    if not ALIVE then return end
+    if input.KeyCode == Enum.KeyCode.F2 then
+        ShowGUI(not guiOpen)
+        return
+    end
+    if input.KeyCode == Enum.KeyCode.F8 then
+        FullDestroy()
+        return
+    end
+    if guiOpen and input.UserInputType == Enum.UserInputType.MouseButton1 then
+        local mx, my = input.Position.X, input.Position.Y
+        -- sliders
+        for i, sl in ipairs(sliders) do
+            local bx, by = 175, 112 + (i-1)*26 + 3
+            if mx >= bx and mx <= bx+130 and my >= by and my <= by+8 then
+                local pct = math.clamp((mx - bx)/130, 0, 1)
+                local v = sl.data.mn + pct * (sl.data.mx - sl.data.mn)
+                if sl.data.fmt == "%.0f" then v = math.floor(v+0.5) end
+                CFG[sl.data.key] = v
+                RefreshGUI()
+                print("[ragebot] " .. sl.data.lbl .. " = " .. v)
+            end
+        end
+        -- toggles
+        for i, tg in ipairs(toggles) do
+            local tx, ty = 290, 112 + #sliderData*26 + (i-1)*24 - 1
+            if mx >= tx and mx <= tx+14 and my >= ty and my <= ty+14 then
+                CFG[tg.data.key] = not CFG[tg.data.key]
+                RefreshGUI()
+                print("[ragebot] " .. tg.data.lbl .. " = " .. tostring(CFG[tg.data.key]))
+            end
+        end
+    end
+end))
+
+AddConn(lp.CharacterAdded:Connect(function()
+    respawnTick = tick()
+    curTarget = nil
+end))
+
+-- ══════════════════════════════════════════════════════════════
 -- MAIN LOOP
 -- ══════════════════════════════════════════════════════════════
-print("[ragebot] v7 ready — F2=menu  F8=destroy")
+print("[ragebot] v8 ready — F2=menu  F8=destroy")
 
 while ALIVE do
-    -- Always run safety
     pcall(VoidCheck)
     pcall(GodMode)
 
-    -- Combat
     local myRoot = Root(LP.Character)
     if myRoot then
         local ok, myPos = pcall(function() return myRoot.Position end)
         if ok and myPos then
-            -- Target switch
             local now = tick()
-            if now - lastSwitch > 0.15 or not curTarget or not Alive(curTarget) then
-                local t, p, d = Nearest(myPos)
-                if t then
-                    curTarget = t
-                    lastSwitch = now
-                else
-                    curTarget = nil
+            if (now - respawnTick) > 1.0 then
+                if now - lastSwitch > 0.15 or not curTarget or not Alive(curTarget) then
+                    local t,p,d = Nearest(myPos)
+                    if t then curTarget = t; lastSwitch = now else curTarget = nil end
                 end
-            end
-
-            -- Attack
-            if curTarget and Alive(curTarget) then
-                local part = Part(curTarget.Character)
-                if part then
-                    local ok2, tPos = pcall(function() return part.Position end)
-                    if ok2 and tPos then
-                        FlyTo(myRoot, tPos)
-                        AimAt(tPos)
-                        if now - lastFire >= CFG.fireDelay then
-                            lastFire = now
-                            pcall(function() mouse1click() end)
+                if curTarget and Alive(curTarget) then
+                    local part = Part(curTarget.Character)
+                    if part then
+                        local ok2, tPos = pcall(function() return part.Position end)
+                        if ok2 and tPos then
+                            FlyTo(myRoot, tPos)
+                            AimAt(tPos)
+                            if now - lastFire >= CFG.fireDelay then
+                                lastFire = now
+                                pcall(function() mouse1click() end)
+                            end
                         end
                     end
                 end
@@ -675,9 +534,8 @@ while ALIVE do
         end
     end
 
-    -- Visuals
     pcall(UpdateHUD)
     pcall(UpdateESP)
-    pcall(UpdateCrosshair)
+    pcall(UpdateCross)
     wait()
 end
