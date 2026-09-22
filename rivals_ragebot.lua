@@ -11,12 +11,13 @@
 
 -- Wait for game to load
 repeat wait() until game:IsLoaded()
-repeat wait() until Players.LocalPlayer
 
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UIS = game:GetService("UserInputService")
 local RS = game:GetService("RunService")
+
+repeat wait() until Players.LocalPlayer
 local LP = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
