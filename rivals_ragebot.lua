@@ -1,5 +1,5 @@
 --[[
-    MATCHA RAGEBOT v3 — RIVALS (FFA) — FIXED
+    MATCHA RAGEBOT v4 — RIVALS (FFA)
     PlaceId: 17625359962 | Nosniy Games
     
     One-liner:
@@ -23,107 +23,82 @@ local lastSwitch = 0
 local curTarget = nil
 local respawnTick = tick()
 
--- ══════════════════════════════════════════════════════════════
--- DEBUG: show notification at every step so we know what breaks
--- ══════════════════════════════════════════════════════════════
-pcall(function() notify("v3 loaded - F8 toggles", "Ragebot", 4) end)
-print("[ragebot] v3 script started")
+pcall(function() notify("v4 loaded - F8 toggles", "Ragebot", 4) end)
+print("[ragebot] v4 started")
 
 -- ══════════════════════════════════════════════════════════════
--- SETTINGS (hardcoded defaults — no menu needed)
+-- HUD INDICATOR (always visible on screen)
 -- ══════════════════════════════════════════════════════════════
-local CFG = {
-    fireDelay   = 0.13,
-    bone        = 1,          -- 0=Head 1=HRP 2=UpperTorso
-    maxDist     = 3500,
-    stick       = true,
-    stickDist   = 3.5,
-    stickHeight = 1.5,
-    lerpSpeed   = 0.55,
-    maxFly      = 200,
-    evasion     = true,
-    evRadius    = 4.5,
-    evSpeed     = 9.0,
-    evJitter    = 1.8,
-    pickup      = true,
-    pickupRange = 40,
-    pickupDelay = 0.15,
-    safeRespawn = true,
-    safeDelay   = 1.8,
-}
+local hud = Drawing.new("Text")
+hud.Position = Vector2.new(20, 20)
+hud.Size = 18
+hud.Font = Drawing.Fonts.Monospace
+hud.Outline = true
+hud.OutlineColor = Color3.new(0, 0, 0)
+hud.Visible = true
 
--- ══════════════════════════════════════════════════════════════
--- MENU (optional — only if UI Binding exists)
--- ══════════════════════════════════════════════════════════════
-local menuLoaded = false
-pcall(function()
-    UI.AddTab("Rivals Rage", function(tab)
-        local c = tab:Section("Combat", "Left")
-        c:Toggle("r_on", "Ragebot", true)
-        c:Keybind("r_kb", F8, "toggle")
-        c:Toggle("r_fire", "Auto Fire", true)
-        c:SliderFloat("r_fd", "Fire Delay", 0.06, 0.5, 0.13, "%.2f")
-        c:Combo("r_bone", "Aim Part", {"Head", "HRP", "UpperTorso"}, 1)
-        c:SliderInt("r_md", "Max Dist", 100, 8000, 3500)
+local hudTarget = Drawing.new("Text")
+hudTarget.Position = Vector2.new(20, 42)
+hudTarget.Size = 14
+hudTarget.Font = Drawing.Fonts.Monospace
+hudTarget.Outline = true
+hudTarget.OutlineColor = Color3.new(0, 0, 0)
+hudTarget.Visible = true
 
-        local m = tab:Section("Movement", "Left")
-        m:Toggle("r_fly", "Fly To Target", true)
-        m:SliderFloat("r_sd", "Keep Dist", 1.0, 12.0, 3.5, "%.1f")
-        m:SliderFloat("r_sh", "Height", -1.0, 8.0, 1.5, "%.1f")
-        m:SliderFloat("r_sp", "Lerp", 0.1, 1.0, 0.55, "%.2f")
-
-        local e = tab:Section("Evasion", "Right")
-        e:Toggle("r_ev", "Orbit", true)
-        e:SliderFloat("r_er", "Radius", 1.0, 10.0, 4.5, "%.1f")
-        e:SliderFloat("r_es", "Speed", 2.0, 18.0, 9.0, "%.1f")
-        e:SliderFloat("r_ej", "Jitter", 0.0, 5.0, 1.8, "%.1f")
-
-        local p = tab:Section("Pickups", "Right")
-        p:Toggle("r_pk", "Auto Pickup", true)
-        p:SliderFloat("r_pr", "Range", 5.0, 80.0, 40.0, "%.0f")
-    end)
-    menuLoaded = true
-    print("[ragebot] menu loaded OK")
-end)
-
-if not menuLoaded then
-    print("[ragebot] menu FAILED — using hardcoded settings")
-    pcall(function() notify("Menu unavailable - using defaults", "Ragebot", 3) end)
+local function UpdateHUD()
+    if ON then
+        hud.Text = "[ RAGEBOT: ON ]"
+        hud.Color = Color3.new(0, 1, 0)
+    else
+        hud.Text = "[ RAGEBOT: OFF ]"
+        hud.Color = Color3.new(1, 0.2, 0.2)
+    end
+    if curTarget and ON then
+        local n = ""
+        pcall(function() n = curTarget.Name end)
+        local d = 0
+        local ok, pp = pcall(function() return Part(curTarget.Character) end)
+        if ok and pp and pp.Position then
+            local mr = Root(lp.Character)
+            if mr then d = math.floor((pp.Position - mr.Position).Magnitude) end
+        end
+        hudTarget.Text = "Target: " .. n .. " [" .. d .. "m]"
+        hudTarget.Color = Color3.new(1, 1, 0)
+    else
+        hudTarget.Text = "Target: none"
+        hudTarget.Color = Color3.new(0.6, 0.6, 0.6)
+    end
 end
 
--- ══════════════════════════════════════════════════════════════
--- READ SETTING (menu or hardcoded fallback)
--- ══════════════════════════════════════════════════════════════
-local function C(id, fallback)
-    if not menuLoaded then return fallback end
-    local ok, v = pcall(function() return UI.GetValue(id) end)
-    if ok and v ~= nil then return v end
-    return fallback
-end
+-- Hardcoded config (no menu dependency)
+local FD = 0.13   -- fire delay
+local MD = 3500    -- max dist
+local SD = 3.5     -- stick dist
+local SH = 1.5     -- stick height
+local EV = true    -- evasion on
+local ER = 4.5     -- evasion radius
+local ES = 9.0     -- evasion speed
+local EJ = 1.8     -- evasion jitter
 
 -- ══════════════════════════════════════════════════════════════
 -- HELPERS
 -- ══════════════════════════════════════════════════════════════
-local function GetRoot(c)
+local function Root(c)
     if not c then return nil end
     local ok, r = pcall(function() return c:FindFirstChild("HumanoidRootPart") end)
     return ok and r or nil
 end
 
-local function GetHum(c)
+local function Hum(c)
     if not c then return nil end
     local ok, h = pcall(function() return c:FindFirstChildOfClass("Humanoid") end)
     return ok and h or nil
 end
 
-local function GetPart(c, idx)
-    local names = {"Head", "HumanoidRootPart", "UpperTorso"}
-    local want = names[(idx or 1) + 1] or "HumanoidRootPart"
-    local ok, p = pcall(function() return c:FindFirstChild(want) end)
-    if ok and p and p.Position then return p end
+local function Part(c)
     for _, n in ipairs({"Head", "HumanoidRootPart", "UpperTorso", "Torso"}) do
-        local ok2, p2 = pcall(function() return c:FindFirstChild(n) end)
-        if ok2 and p2 and p2.Position then return p2 end
+        local ok, p = pcall(function() return c:FindFirstChild(n) end)
+        if ok and p and p.Position then return p end
     end
     return nil
 end
@@ -132,27 +107,27 @@ local function Alive(plr)
     if plr == lp then return false end
     local c = plr.Character
     if not c then return false end
-    local h = GetHum(c)
+    local h = Hum(c)
     if h then
         local ok, hp = pcall(function() return h.Health end)
         if ok and hp and hp <= 0 then return false end
     end
-    local r = GetRoot(c)
+    local r = Root(c)
     return r and r.Position and true or false
 end
 
-local function Nearest(pos, maxD)
-    local best, bestP, bestD = nil, nil, maxD
+local function Nearest(pos)
+    local best, bestP, bestD = nil, nil, MD
     for _, plr in ipairs(Players:GetPlayers()) do
         local ok, alive = pcall(function() return Alive(plr) end)
         if ok and alive then
-            local part = GetPart(plr.Character, C("r_bone", CFG.bone))
-            if part and part.Position then
-                local d = (part.Position - pos).Magnitude
+            local p = Part(plr.Character)
+            if p and p.Position then
+                local d = (p.Position - pos).Magnitude
                 if d < bestD then
                     bestD = d
                     best = plr
-                    bestP = part
+                    bestP = p
                 end
             end
         end
@@ -170,10 +145,52 @@ local function AimAt(pos)
 end
 
 -- ══════════════════════════════════════════════════════════════
--- PICKUP SCANNER
+-- MOVEMENT: velocity-based fly + position jitter
 -- ══════════════════════════════════════════════════════════════
-local HP_KW = {"health","medkit","med","heal","hp","bandage","kit","restore","revive"}
-local AM_KW = {"ammo","bullet","mag","clip","round","shell","reload","supply"}
+local function FlyToTarget(root, tPos)
+    local myPos = root.Position
+    local delta = tPos - myPos
+    local dist = delta.Magnitude
+
+    -- desired offset: keep SD studs away at SH height above target
+    local dir = delta.Unit
+    local desired = tPos - dir * SD + Vector3.new(0, SH, 0)
+
+    -- Orbit evasion (add offset to desired)
+    if EV then
+        orbitAngle = orbitAngle + ES * 0.03
+        local ox = math.cos(orbitAngle) * ER
+        local oz = math.sin(orbitAngle) * ER
+        local oy = math.sin(orbitAngle * 2.7) * EJ
+        desired = desired + Vector3.new(ox, oy, oz)
+    end
+
+    local moveDelta = desired - myPos
+    local moveDist = moveDelta.Magnitude
+
+    if moveDist < 0.5 then return end
+
+    -- Method 1: Set velocity (continuous push — server can't fully correct)
+    local vel = moveDelta.Unit * math.clamp(moveDist * 4, 20, 300)
+    pcall(function() root.AssemblyLinearVelocity = vel end)
+
+    -- Method 2: Position jitter (rapid small teleports — creates blur motion)
+    -- Only do this when close (last 50 studs) for the "snap on target" effect
+    if moveDist < 50 then
+        local jitter = Vector3.new(
+            (math.random() - 0.5) * 2,
+            (math.random() - 0.5) * 1,
+            (math.random() - 0.5) * 2
+        )
+        pcall(function() root.Position = desired + jitter end)
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════
+-- PICKUP: teleport grab (works because it's a one-frame snap)
+-- ══════════════════════════════════════════════════════════════
+local HP_KW = {"health","medkit","med","heal","hp","bandage","kit","restore"}
+local AM_KW = {"ammo","bullet","mag","clip","round","shell","supply"}
 
 local function IsPickup(obj, kw)
     if not obj or not obj:IsA("BasePart") then return false end
@@ -185,14 +202,12 @@ local function IsPickup(obj, kw)
 end
 
 local function DoPickup()
-    if not C("r_pk", CFG.pickup) then return end
     local now = tick()
-    if now - lastPickup < CFG.pickupDelay then return end
-    local myRoot = GetRoot(lp.Character)
+    if now - lastPickup < 0.15 then return end
+    local myRoot = Root(lp.Character)
     if not myRoot then return end
     local myPos = myRoot.Position
-    local range = C("r_pr", CFG.pickupRange)
-    local bestObj, bestD = nil, range
+    local bestObj, bestD = nil, 50
 
     local ok, desc = pcall(function() return Workspace:GetDescendants() end)
     if not ok then return end
@@ -214,16 +229,15 @@ local function DoPickup()
         local ok3, bpos = pcall(function() return bestObj.Position end)
         if ok3 and bpos then
             lastPickup = now
-            pcall(function() myRoot.Position = bpos + Vector3.new(0, 1, 0) end)
+            -- snap to pickup, then snap back next frame
+            pcall(function() myRoot.Position = bpos + Vector3.new(0, 2, 0) end)
         end
     end
 end
 
 -- ══════════════════════════════════════════════════════════════
--- F8 TOGGLE (two methods for safety)
+-- F8 TOGGLE (two methods)
 -- ══════════════════════════════════════════════════════════════
-
--- Method 1: iskeypressed polling
 spawn(function()
     while true do
         local ok, held = pcall(function() return iskeypressed(F8) end)
@@ -233,7 +247,6 @@ spawn(function()
                 f8Debounce = now
                 ON = not ON
                 pcall(function() notify("Ragebot: " .. (ON and "ON" or "OFF"), "Rivals", 2) end)
-                pcall(function() UI.SetValue("r_on", ON) end)
                 print("[ragebot] toggled:", ON)
             end
         end
@@ -241,7 +254,6 @@ spawn(function()
     end
 end)
 
--- Method 2: UserInputService (backup)
 pcall(function()
     UIS.InputBegan:Connect(function(input, processed)
         if processed then return end
@@ -251,16 +263,12 @@ pcall(function()
                 f8Debounce = now
                 ON = not ON
                 pcall(function() notify("Ragebot: " .. (ON and "ON" or "OFF"), "Rivals", 2) end)
-                pcall(function() UI.SetValue("r_on", ON) end)
-                print("[ragebot] toggled via UIS:", ON)
+                print("[ragebot] toggled UIS:", ON)
             end
         end
     end)
 end)
 
-print("[ragebot] F8 toggle registered")
-
--- Respawn cooldown
 pcall(function()
     lp.CharacterAdded:Connect(function()
         respawnTick = tick()
@@ -268,31 +276,28 @@ pcall(function()
     end)
 end)
 
+print("[ragebot] F8 registered, main loop starting")
+
 -- ══════════════════════════════════════════════════════════════
 -- MAIN LOOP
 -- ══════════════════════════════════════════════════════════════
-print("[ragebot] main loop starting")
-
 while true do
-    -- Read from menu if loaded, otherwise use hardcoded + F8 toggle
-    local enabled = C("r_on", ON)
-
-    if enabled then
-        local myRoot = GetRoot(lp.Character)
+    if ON then
+        local myRoot = Root(lp.Character)
         if myRoot and myRoot.Position then
             local myPos = myRoot.Position
 
-            -- Respawn cooldown
-            if C("safe_respawn", CFG.safeRespawn) and (tick() - respawnTick) < CFG.safeDelay then
+            -- Respawn cooldown (1.8s)
+            if (tick() - respawnTick) < 1.8 then
                 -- skip
             else
                 -- Pickups
                 DoPickup()
 
-                -- Target switch
+                -- Target switch (every 0.3s or if dead)
                 local now = tick()
                 if now - lastSwitch > 0.3 or not curTarget or not Alive(curTarget) then
-                    local t, p = Nearest(myPos, C("r_md", CFG.maxDist))
+                    local t = Nearest(myPos)
                     if t then
                         curTarget = t
                         lastSwitch = now
@@ -301,60 +306,26 @@ while true do
 
                 -- Attack
                 if curTarget and Alive(curTarget) then
-                    local part = GetPart(curTarget.Character, C("r_bone", CFG.bone))
+                    local part = Part(curTarget.Character)
                     if part and part.Position then
                         local tPos = part.Position
 
-                        -- Fly
-                        if C("r_fly", CFG.stick) then
-                            local sD = C("r_sd", CFG.stickDist)
-                            local sH = C("r_sh", CFG.stickHeight)
-                            local lerp = C("r_sp", CFG.lerpSpeed)
-                            local mFly = C("safe_maxflyspeed", CFG.maxFly)
+                        -- Fly to target (velocity + jitter)
+                        FlyToTarget(myRoot, tPos)
 
-                            local desired = Vector3.new(tPos.X, tPos.Y + sH, tPos.Z)
-                            local delta = myPos - tPos
-                            if delta.Magnitude > 0.01 then
-                                local flat = Vector3.new(delta.X, 0, delta.Z)
-                                if flat.Magnitude > 0.01 then
-                                    local dir = flat.Unit
-                                    desired = Vector3.new(tPos.X + dir.X * sD, tPos.Y + sH, tPos.Z + dir.Z * sD)
-                                end
-                            end
-
-                            -- Orbit evasion
-                            if C("r_ev", CFG.evasion) then
-                                local rad = C("r_er", CFG.evRadius)
-                                local spd = C("r_es", CFG.evSpeed)
-                                local jit = C("r_ej", CFG.evJitter)
-                                orbitAngle = orbitAngle + spd * 0.03
-                                local ox = math.cos(orbitAngle) * rad
-                                local oz = math.sin(orbitAngle) * rad
-                                local oy = math.sin(orbitAngle * 2.7) * jit
-                                desired = Vector3.new(desired.X + ox, desired.Y + oy, desired.Z + oz)
-                            end
-
-                            local goal = myPos:Lerp(desired, lerp)
-                            local moveD = goal - myPos
-                            if moveD.Magnitude > mFly * 0.016 then
-                                goal = myPos + moveD.Unit * (mFly * 0.016)
-                            end
-                            pcall(function() myRoot.Position = goal end)
-                        end
-
-                        -- Aim + fire
+                        -- Lock camera on target
                         AimAt(tPos)
-                        if C("r_fire", true) then
-                            local fd = C("r_fd", CFG.fireDelay)
-                            if now - lastFire >= fd then
-                                lastFire = now
-                                pcall(function() mouse1click() end)
-                            end
+
+                        -- Auto fire
+                        if now - lastFire >= FD then
+                            lastFire = now
+                            pcall(function() mouse1click() end)
                         end
                     end
                 end
             end
         end
     end
+    pcall(UpdateHUD)
     wait()
 end
