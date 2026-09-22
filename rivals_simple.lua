@@ -28,10 +28,12 @@ end
 local Camera = nil
 pcall(function() Camera = Workspace.CurrentCamera end)
 
-local F2 = 0x71
+local F2, KEY_X, F8 = 0x71, 0x58, 0x77 -- F2 primary, X backup, F8 destroy
 local ON = false
-local dF2 = 0
+local ALIVE = true
+local dKey = 0
 local target = nil
+local deadFrames = 0
 local lastFire = 0
 local lastMods = 0
 
@@ -67,32 +69,45 @@ hud.Size = 20
 hud.Font = Drawing.Fonts.Monospace
 hud.Outline = true
 hud.Color = Color3.new(1, 0.3, 0.3)
-hud.Text = "OFF — press F2"
+hud.Text = "OFF — F2 or X"
 hud.Visible = true
 
-print("[simple] loaded — press F2")
+print("[simple] loaded — press F2 or X")
 
-while true do
+while ALIVE do
     local now = tick()
 
-    -- F2 toggle
-    local f2 = false
-    pcall(function() f2 = iskeypressed(F2) end)
-    if f2 and now - dF2 > 0.4 then
-        dF2 = now
+    -- toggle: F2 primary, X backup (F-keys often don't register in external)
+    local kToggle = false
+    pcall(function()
+        kToggle = iskeypressed(F2) or iskeypressed(KEY_X)
+    end)
+    if kToggle and now - dKey > 0.4 then
+        dKey = now
         ON = not ON
         target = nil
+        deadFrames = 0
         if ON then
             hud.Text = "ON"
             hud.Color = Color3.new(0, 1, 0)
             print("[simple] ON")
         else
-            hud.Text = "OFF — press F2"
+            hud.Text = "OFF — F2 or X"
             hud.Color = Color3.new(1, 0.3, 0.3)
             print("[simple] OFF")
             local r = Root(LP.Character)
             if r then pcall(function() r.AssemblyLinearVelocity = Vector3.new(0, 0, 0) end) end
         end
+    end
+
+    -- F8 = destroy everything (emergency off)
+    local kKill = false
+    pcall(function() kKill = iskeypressed(F8) end)
+    if kKill then
+        print("[simple] DESTROYED")
+        pcall(function() hud:Remove() end)
+        ALIVE = false
+        break
     end
 
     if ON then
@@ -130,11 +145,21 @@ while true do
         if myRoot then
             local ok, myPos = pcall(function() return myRoot.Position end)
             if ok and myPos then
-                -- drop dead target, find nearest alive
-                local okA = false
-                if target then okA = Alive(target) end
-                if not okA then
-                    target = nil
+                -- sticky target: only drop after 10 bad reads in a row
+                -- (one failed read = lag, not death — keeps you glued)
+                if target then
+                    if Alive(target) then
+                        deadFrames = 0
+                    else
+                        deadFrames = deadFrames + 1
+                    end
+                    if deadFrames >= 10 then
+                        print("[simple] target dead: " .. target.Name)
+                        target = nil
+                        deadFrames = 0
+                    end
+                end
+                if not target then
                     local bestD = 1e9
                     local okL, list = pcall(function() return Players:GetPlayers() end)
                     if okL and list then
@@ -160,7 +185,10 @@ while true do
                     if tr then
                         local ok2, tp = pcall(function() return tr.Position end)
                         if ok2 and tp then
+                            -- glue: teleport inside + kill velocity so server can't fling you back
                             pcall(function() myRoot.Position = tp end)
+                            pcall(function() myRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0) end)
+                            pcall(function() myRoot.CanCollide = false end)
                             local okc, cp = pcall(function() return Camera.Position end)
                             if okc and cp then pcall(function() Camera.lookAt(cp, tp) end) end
                             if now - lastFire >= 0.1 then
